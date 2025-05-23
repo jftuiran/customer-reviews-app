@@ -13,15 +13,25 @@ nltk.download('stopwords')
 st.set_page_config(page_title="Customer Reviews Analysis", layout="centered")
 st.title("Customer Reviews - NLP Analysis")
 
+# Cachear los pipelines pesados
+@st.cache_resource(show_spinner="Loading sentiment model...")
+def get_sentiment_pipeline():
+    return pipeline("text-classification", model="tabularisai/multilingual-sentiment-analysis")
+
+@st.cache_resource(show_spinner="Loading summarization model...")
+def get_summarizer_pipeline():
+    return pipeline("summarization", model="facebook/bart-large-cnn")
+
+sentiment_pipe = get_sentiment_pipeline()
+summarizer = get_summarizer_pipeline()
+
 uploaded_file = st.file_uploader("Upload your CSV file with reviews", type=["csv"])
 if uploaded_file:
-    # Mostrar contenido del archivo para depuración
     content = uploaded_file.read().decode('utf-8')
     st.text_area("File preview (first 1000 chars):", content[:1000], height=150)
     uploaded_file.seek(0)
 
     try:
-        # Intentar cargar con punto y coma, si falla, intentar con coma
         try:
             df = pd.read_csv(uploaded_file, delimiter=';')
         except:
@@ -38,37 +48,51 @@ if uploaded_file:
     st.dataframe(df.head())
 
     # Limpieza de texto (solo inglés)
-    lang = 'english'
+    stop_words = set(stopwords.words('english'))
     text = " ".join(df['opinion'].astype(str))
-    stop_words = set(stopwords.words(lang))
     words = re.findall(r'\b\w+\b', text.lower())
     filtered_words = [w for w in words if w not in stop_words]
 
-    # Nube de palabras
-    wordcloud = WordCloud(width=800, height=400, background_color='white', colormap='viridis').generate(" ".join(filtered_words))
+    # --- Nube de palabras con fondo oscuro ---
     st.subheader("Word Cloud")
-    fig, ax = plt.subplots(figsize=(8,4))
-    ax.imshow(wordcloud, interpolation='bilinear')
-    ax.axis('off')
-    st.pyplot(fig)
+    fig_wc, ax_wc = plt.subplots(figsize=(8, 4), facecolor='#222831')
+    wordcloud = WordCloud(
+        width=800,
+        height=400,
+        background_color='#222831',
+        colormap='Blues'
+    ).generate(" ".join(filtered_words))
+    ax_wc.imshow(wordcloud, interpolation='bilinear')
+    ax_wc.axis('off')
+    fig_wc.patch.set_facecolor('#222831')
+    st.pyplot(fig_wc)
 
-    # Top 10 palabras más frecuentes
+    # --- Top 10 most frequent words ---
     counter = Counter(filtered_words)
     common_words = counter.most_common(10)
     words_, counts = zip(*common_words)
-    fig, ax = plt.subplots(figsize=(8,4))
-    bars = ax.barh(words_, counts, color='#5DADE2')
+    fig_bar, ax_bar = plt.subplots(figsize=(9, 5), facecolor='#222831')
+    bar_colors = ['#4FC3F7', '#29B6F6', '#039BE5', '#0288D1', '#0277BD', '#01579B', '#B3E5FC', '#81D4FA', '#0288D1', '#00B8D4']
+    bars = ax_bar.barh(words_, counts, color=bar_colors[:len(words_)], edgecolor='black', height=0.7)
+    ax_bar.set_xlabel("Frequency", fontsize=14, weight='bold', color='white')
+    ax_bar.set_title("Top 10 Most Frequent Words", fontsize=18, weight='bold', pad=15, color='white')
+    ax_bar.invert_yaxis()
+    ax_bar.set_facecolor('#222831')
+    fig_bar.patch.set_facecolor('#222831')
+    # Etiquetas grandes y legibles
     for bar, count in zip(bars, counts):
-        ax.text(bar.get_width()-0.2, bar.get_y()+bar.get_height()/2, str(count), va='center', ha='right', color='white', fontsize=11, fontweight='bold')
-    ax.set_xlabel("Frequency", fontsize=12)
-    ax.set_title("Top 10 Most Frequent Words", fontsize=14, weight='bold')
-    ax.invert_yaxis()
+        ax_bar.text(bar.get_width() + 1, bar.get_y() + bar.get_height()/2,
+                str(count), va='center', ha='left', color='#1fa2ff', fontsize=15, fontweight='bold')
+    ax_bar.tick_params(axis='x', colors='white')
+    ax_bar.tick_params(axis='y', colors='white')
+    ax_bar.xaxis.label.set_color('white')
+    ax_bar.yaxis.label.set_color('white')
+    ax_bar.title.set_color('white')
     plt.tight_layout()
-    st.pyplot(fig)
+    st.pyplot(fig_bar)
 
-    # Clasificación de sentimiento (solo inglés, modelo multilingüe)
+    # --- Sentiment classification ---
     st.subheader("Sentiment Classification")
-    sentiment_pipe = pipeline("text-classification", model="tabularisai/multilingual-sentiment-analysis")
     def map_sentiment(label):
         if label in ["Very Positive", "Positive"]:
             return "positive"
@@ -91,23 +115,30 @@ if uploaded_file:
     st.dataframe(df[['opinion', 'sentiment']])
 
     sentiment_counts = df['sentiment'].value_counts()
-    fig, ax = plt.subplots(figsize=(6,4))
-    bars = ax.barh(sentiment_counts.index, sentiment_counts.values, color=['#48C9B0', '#F4D03F', '#E74C3C'])
+    fig_sent, ax_sent = plt.subplots(figsize=(6,4), facecolor='#222831')
+    bars = ax_sent.barh(sentiment_counts.index, sentiment_counts.values, color=['#48C9B0', '#F4D03F', '#E74C3C'], edgecolor='black', linewidth=1.5)
+    ax_sent.set_xlabel("Number of Reviews", fontsize=12, color='white')
+    ax_sent.set_title("Sentiment Distribution", fontsize=14, weight='bold', color='white')
+    ax_sent.invert_yaxis()
+    ax_sent.set_facecolor('#222831')
+    fig_sent.patch.set_facecolor('#222831')
     for bar, count in zip(bars, sentiment_counts.values):
-        ax.text(bar.get_width()-0.2, bar.get_y()+bar.get_height()/2, str(count), va='center', ha='right', color='white', fontsize=11, fontweight='bold')
-    ax.set_xlabel("Number of Reviews", fontsize=12)
-    ax.set_title("Sentiment Distribution", fontsize=14, weight='bold')
-    ax.invert_yaxis()
+        ax_sent.text(bar.get_width()-0.1, bar.get_y()+bar.get_height()/2, str(count),
+                va='center', ha='right', color='white', fontsize=12, fontweight='bold', bbox=dict(facecolor='black', alpha=0.5, boxstyle='round,pad=0.2'))
+    ax_sent.tick_params(axis='x', colors='white')
+    ax_sent.tick_params(axis='y', colors='white')
+    ax_sent.xaxis.label.set_color('white')
+    ax_sent.yaxis.label.set_color('white')
+    ax_sent.title.set_color('white')
     plt.tight_layout()
-    st.pyplot(fig)
+    st.pyplot(fig_sent)
 
-    # Summarization (solo inglés)
+    # --- Summarization ---
     st.subheader("General Summary of Reviews")
-    summarizer = pipeline("summarization", model="facebook/bart-large-cnn")
     resumen = summarizer(" ".join(df['opinion'].astype(str))[:2000], max_length=80, min_length=20, do_sample=False)[0]['summary_text']
     st.info(resumen)
 
-    # Analyze new review
+    # --- Analyze new review ---
     st.subheader("Analyze a New Review")
     new_comment = st.text_area("Write a new review here:")
     if st.button("Analyze Review"):
