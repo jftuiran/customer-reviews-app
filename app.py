@@ -22,8 +22,8 @@ st.title("Customer Reviews - NLP Analysis")
 @st.cache_resource(show_spinner="Loading sentiment model...")
 def get_sentiment_pipeline():
     from transformers import pipeline
-    # Modelo ligero y estable para análisis de sentimiento
-    return pipeline("sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english")
+    # Modelo que sí detecta positivo, negativo y neutral
+    return pipeline("sentiment-analysis", model="cardiffnlp/twitter-roberta-base-sentiment-latest")
 
 @st.cache_resource(show_spinner="Loading summarization model...")
 def get_summarizer_pipeline():
@@ -39,7 +39,7 @@ summarizer = None
 uploaded_file = st.file_uploader("Upload your CSV file with reviews", type=["csv"])
 if uploaded_file:
     try:
-        # --- LÓGICA DE LECTURA ROBUSTA ---
+        # --- LÓGICA DE LECTURA ROBUSTA (INCLUIDA) ---
         # Lee el archivo como texto plano para evitar errores de formato de pandas
         content = uploaded_file.read().decode('utf-8')
         lines = content.splitlines()
@@ -48,14 +48,11 @@ if uploaded_file:
         if lines and lines[0].strip().lower() == 'opinion':
             lines = lines[1:]
 
-        # Usa regex para extraer todo el texto entre comillas.
-        # Esto maneja correctamente comas y saltos de línea dentro de una misma opinión.
-        # re.DOTALL hace que '.' también coincida con saltos de línea.
+        # Usa regex para extraer todo el texto entre comillas, manejando saltos de línea internos
         full_text = "\n".join(lines)
         reviews = re.findall(r'"(.*?)"', full_text, re.DOTALL)
 
-        # Si el regex no encuentra nada (quizás el archivo no usa comillas),
-        # se usa cada línea como una opinión.
+        # Si no encuentra comillas, asume que cada línea es una opinión
         if not reviews and lines:
             reviews = [line.strip() for line in lines if line.strip()]
         
@@ -128,17 +125,15 @@ if uploaded_file:
 
     # --- Clasificación de Sentimiento ---
     st.subheader("Sentiment Classification")
-    def map_sentiment(label):
-        return label.lower()
-
+    
     def safe_sentiment(text):
         global sentiment_pipe
         if sentiment_pipe is None:
             sentiment_pipe = get_sentiment_pipeline()
         try:
-            # Truncar texto para que no exceda el límite del modelo
             result = sentiment_pipe(text[:512])
-            return map_sentiment(result[0]['label']) if result else "neutral"
+            # El modelo devuelve 'positive', 'negative' o 'neutral'
+            return result[0]['label'].lower() if result else "neutral"
         except Exception:
             return "neutral"
 
@@ -168,7 +163,7 @@ if uploaded_file:
 
     # --- Resumen General de Opiniones ---
     st.subheader("General Summary of Reviews")
-    text_to_summarize = " ".join(df['opinion'].astype(str))[:2000] # Limita texto para el modelo
+    text_to_summarize = " ".join(df['opinion'].astype(str))[:2000]
     if summarizer is None:
         summarizer = get_summarizer_pipeline()
     try:
@@ -195,4 +190,3 @@ if uploaded_file:
 
 else:
     st.info("Upload a CSV file with a column named 'opinion' to begin.")
-
