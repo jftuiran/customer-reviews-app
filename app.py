@@ -3,40 +3,41 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from wordcloud import WordCloud
 from collections import Counter
-from nltk.corpus import stopwords
 import nltk
 import re
-from transformers import pipeline
 
-nltk.download('stopwords')
+# Elimina la descarga en caliente, solo descarga si falta
+try:
+    nltk.data.find('corpora/stopwords')
+except LookupError:
+    nltk.download('stopwords')
 
+from nltk.corpus import stopwords
+
+# === Configuración básica Streamlit ===
 st.set_page_config(page_title="Customer Reviews Analysis", layout="centered")
 st.title("Customer Reviews - NLP Analysis")
 
-# Cachear los pipelines pesados
+# == Carga diferida y ligera de modelos HuggingFace ==
 @st.cache_resource(show_spinner="Loading sentiment model...")
 def get_sentiment_pipeline():
-    return pipeline("text-classification", model="tabularisai/multilingual-sentiment-analysis")
+    from transformers import pipeline
+    # Cambia a un modelo pequeño, multilingüe si lo necesitas
+    return pipeline("sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english")
 
 @st.cache_resource(show_spinner="Loading summarization model...")
 def get_summarizer_pipeline():
-    return pipeline("summarization", model="facebook/bart-large-cnn")
+    from transformers import pipeline
+    # Modelo resumen pequeño, puedes sustituir por t5-small si el consumo de RAM es alto
+    return pipeline("summarization", model="sshleifer/distilbart-cnn-12-6") 
 
-sentiment_pipe = get_sentiment_pipeline()
-summarizer = get_summarizer_pipeline()
+sentiment_pipe = None
+summarizer = None
 
 uploaded_file = st.file_uploader("Upload your CSV file with reviews", type=["csv"])
 if uploaded_file:
-    content = uploaded_file.read().decode('utf-8')
-    st.text_area("File preview (first 1000 chars):", content[:1000], height=150)
-    uploaded_file.seek(0)
-
     try:
-        try:
-            df = pd.read_csv(uploaded_file, delimiter=';')
-        except:
-            uploaded_file.seek(0)
-            df = pd.read_csv(uploaded_file)
+        df = pd.read_csv(uploaded_file, nrows=1000)  # Procesa máximo 1000 rows, ajústalo según recursos
         if 'opinion' not in df.columns:
             st.error("The file must have a column named 'opinion'.")
             st.stop()
@@ -44,16 +45,15 @@ if uploaded_file:
         st.error(f"Error reading the file: {e}")
         st.stop()
 
-    st.write("Preview of reviews:")
+    st.write("Preview of uploaded reviews:")
     st.dataframe(df.head())
 
-    # Limpieza de texto (solo inglés)
+    # --- Limpieza de texto y Wordcloud ---
     stop_words = set(stopwords.words('english'))
     text = " ".join(df['opinion'].astype(str))
     words = re.findall(r'\b\w+\b', text.lower())
     filtered_words = [w for w in words if w not in stop_words]
 
-    # --- Nube de palabras con fondo oscuro ---
     st.subheader("Word Cloud")
     fig_wc, ax_wc = plt.subplots(figsize=(8, 4), facecolor='#222831')
     wordcloud = WordCloud(
@@ -67,10 +67,10 @@ if uploaded_file:
     fig_wc.patch.set_facecolor('#222831')
     st.pyplot(fig_wc)
 
-    # --- Top 10 most frequent words ---
+    # --- Top 10 palabras ---
     counter = Counter(filtered_words)
     common_words = counter.most_common(10)
-    words_, counts = zip(*common_words)
+    words_, counts = zip(*common_words) if common_words else ([], [])
     fig_bar, ax_bar = plt.subplots(figsize=(9, 5), facecolor='#222831')
     bar_colors = ['#4FC3F7', '#29B6F6', '#039BE5', '#0288D1', '#0277BD', '#01579B', '#B3E5FC', '#81D4FA', '#0288D1', '#00B8D4']
     bars = ax_bar.barh(words_, counts, color=bar_colors[:len(words_)], edgecolor='black', height=0.7)
@@ -79,7 +79,6 @@ if uploaded_file:
     ax_bar.invert_yaxis()
     ax_bar.set_facecolor('#222831')
     fig_bar.patch.set_facecolor('#222831')
-    # Etiquetas grandes y legibles
     for bar, count in zip(bars, counts):
         ax_bar.text(bar.get_width() + 1, bar.get_y() + bar.get_height()/2,
                 str(count), va='center', ha='left', color='#1fa2ff', fontsize=15, fontweight='bold')
@@ -93,30 +92,35 @@ if uploaded_file:
 
     # --- Sentiment classification ---
     st.subheader("Sentiment Classification")
+
     def map_sentiment(label):
-        if label in ["Very Positive", "Positive"]:
+        if label in ["POSITIVE"]:
             return "positive"
-        elif label == "Neutral":
-            return "neutral"
-        elif label in ["Very Negative", "Negative"]:
+        elif label in ["NEGATIVE"]:
             return "negative"
         else:
             return "neutral"
+
     def safe_sentiment(text):
+        global sentiment_pipe
+        if sentiment_pipe is None:
+            sentiment_pipe = get_sentiment_pipeline()
         try:
-            result = sentiment_pipe(text)
+            result = sentiment_pipe(text[:512])  # Modelos pequeños, máximo 512 caracteres
             if result and len(result) > 0:
-                return map_sentiment(result[0]['label'])
+                return map_sentiment(result[0]['label'].upper())
             else:
                 return "neutral"
         except Exception:
             return "neutral"
-    df['sentiment'] = df['opinion'].apply(safe_sentiment)
+
+    df['sentiment'] = df['opinion'].astype(str).apply(safe_sentiment)
     st.dataframe(df[['opinion', 'sentiment']])
 
     sentiment_counts = df['sentiment'].value_counts()
     fig_sent, ax_sent = plt.subplots(figsize=(6,4), facecolor='#222831')
-    bars = ax_sent.barh(sentiment_counts.index, sentiment_counts.values, color=['#48C9B0', '#F4D03F', '#E74C3C'], edgecolor='black', linewidth=1.5)
+    bar_colors_map = {'positive': '#48C9B0', 'neutral': '#F4D03F', 'negative': '#E74C3C'}
+    bars = ax_sent.barh(sentiment_counts.index, sentiment_counts.values, color=[bar_colors_map.get(s, '#888') for s in sentiment_counts.index], edgecolor='black', linewidth=1.5)
     ax_sent.set_xlabel("Number of Reviews", fontsize=12, color='white')
     ax_sent.set_title("Sentiment Distribution", fontsize=14, weight='bold', color='white')
     ax_sent.invert_yaxis()
@@ -135,20 +139,29 @@ if uploaded_file:
 
     # --- Summarization ---
     st.subheader("General Summary of Reviews")
-    resumen = summarizer(" ".join(df['opinion'].astype(str))[:2000], max_length=80, min_length=20, do_sample=False)[0]['summary_text']
-    st.info(resumen)
+    text_to_summarize = " ".join(df['opinion'].astype(str))[:1500]  # Limita longitud por modelo
+    if summarizer is None:
+        summarizer = get_summarizer_pipeline()
+    try:
+        resumen = summarizer(text_to_summarize, max_length=80, min_length=20, do_sample=False)[0]['summary_text']
+        st.info(resumen)
+    except Exception:
+        st.warning("Review text is too short or summarization failed.")
 
-    # --- Analyze new review ---
+    # --- Nuevo análisis de opinión ---
     st.subheader("Analyze a New Review")
     new_comment = st.text_area("Write a new review here:")
-    if st.button("Analyze Review"):
-        if new_comment.strip():
-            sentiment = safe_sentiment(new_comment)
-            resumen_nuevo = summarizer(new_comment, max_length=40, min_length=10, do_sample=False)[0]['summary_text'] if len(new_comment.split()) > 20 else new_comment
-            st.write(f"**Sentiment:** {sentiment.capitalize()}")
-            st.write(f"**Summary:** {resumen_nuevo}")
-        else:
-            st.warning("Please write a review.")
+    if st.button("Analyze Review") and new_comment.strip():
+        sentiment = safe_sentiment(new_comment)
+        try:
+            resumen_nuevo = summarizer(new_comment, max_length=40, min_length=10, do_sample=False)[0]['summary_text'] \
+                if len(new_comment.split()) > 20 else new_comment
+        except Exception:
+            resumen_nuevo = new_comment
+        st.write(f"**Sentiment:** {sentiment.capitalize()}")
+        st.write(f"**Summary:** {resumen_nuevo}")
+    elif st.button("Analyze Review"):
+        st.warning("Please write a review.")
 
 else:
     st.info("Please upload a CSV file with a column named 'opinion'.")
